@@ -153,7 +153,7 @@ if __name__ == "__main__":
                         img, label = img.to(device), label.to(device)
                         output = model(img)
                         val_loss += cross_entropy(output, label)
-                        print(f'L_val: {val_loss.item():.4f}')
+                        print(f'L_val: {val_loss.item() / i_v:.4f}')
                     val_loss = val_loss / i_v
                     if val_loss <= min_val_loss:
                         min_val_loss = val_loss
