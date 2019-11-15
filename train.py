@@ -21,9 +21,9 @@ parser.add_argument('--n_gpu', type=int, default=1, help='number of GPUs to use'
 parser.add_argument('--labeled_dir', help='path to training labeled data csv', default='/home/ted/Projects/Chest%20X-Ray%20Images%20Classification/data/CheXpert-v1.0-small/split/train.csv')
 parser.add_argument('--validation_dir', help='path to validation labeled data csv', default='/home/ted/Projects/Chest%20X-Ray%20Images%20Classification/data/CheXpert-v1.0-small/split/dev.csv')
 parser.add_argument('--unlabeled_dir', help='path to unlabeled data csv', default='')
-parser.add_argument('--n_workers', type=int, help='number of workers', default=10)
+parser.add_argument('--n_workers', type=int, help='number of workers', default=20)
 parser.add_argument('--bs', type=int, help='batch_size', default=8)
-parser.add_argument('--lr', type=float, help='initial learning rate', default=1e-4)
+parser.add_argument('--lr', type=float, help='initial learning rate', default=1e-3)
 parser.add_argument('--n_epoch', type=int, help='number of epoch', default=5)
 opt = parser.parse_args()
 print(opt)
@@ -78,7 +78,7 @@ if __name__ == "__main__":
     else:
         supervised_weight, unsupervised_weight = 1.0, 0.0
 
-    optimizer = optim.Adam(model.parameters(), lr=opt.lr)
+    optimizer = optim.SGD(model.parameters(), lr=opt.lr, momentum=0.99, nesterov=True)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.1, patience=1)
 
     ## Training Loop
@@ -86,10 +86,12 @@ if __name__ == "__main__":
     writer = SummaryWriter()
 
     n_epoch = opt.n_epoch
-    min_train_loss = 0.0
-    min_val_loss = 0.0
+    min_train_loss = 1.0
+    min_val_loss = 1.0
+    total_train_loss = 0.0
     print("Start training")
     for epoch in range(n_epoch):
+        s_t = time.time()
         ## Training
         model.train()
         for i, (img, label) in enumerate(labeled_dataloader):
@@ -124,12 +126,15 @@ if __name__ == "__main__":
                 # TOTAL LOSS #
                 train_loss += unsupervised_weight*unsupervised_loss
 
+            total_train_loss += train_loss
+
             train_loss.backward()
             optimizer.step()
 
             e_t = time.time()
-            n_iters_per_second = 1 // (e_t - s_t)
-            print(f'[{i}/{len(labeled_dataloader)//batch_size}] L_train: {train_loss.item()} n_it/s: {n_iters_per_second}')
+            n_iters_per_second = int(1 // (e_t - s_t))
+            print(f'[{i}/{len(labeled_dataloader)}] L_train: {train_loss.item():.4f} n_it/s: {n_iters_per_second}')
+            writer.add_scalar('L_train', train_loss.item(), i)
 
             # start saving best model (train_loss) after 1000th iterations
             if (i > 1000 or epoch > 0) and train_loss <= min_train_loss:
@@ -137,19 +142,25 @@ if __name__ == "__main__":
                 torch.save(model.state_dict(), f'{output_dir}/model_best_train.pth')
         
             # evaluation and save best model (val_loss) after every 300 iterations
-            if i % 300 == 0:
+            if i % 500 == 0 and i > 0:
                 model.eval()
                 with torch.no_grad():
                     val_loss = 0.0
-                    for i, (img, label) in enumerate(validation_dataloader):
+                    for i_v, (img, label) in enumerate(validation_dataloader):
+                        if i_v > 100:
+                            i_v -= 1
+                            break
                         img, label = img.to(device), label.to(device)
                         output = model(img)
                         val_loss += cross_entropy(output, label)
-                    val_loss = val_loss / i
+                        print(f'L_val: {val_loss.item():.4f}')
+                    val_loss = val_loss / i_v
                     if val_loss <= min_val_loss:
                         min_val_loss = val_loss
                         torch.save(model.state_dict(), f'{output_dir}/model_best_val.pth')
+                    writer.add_scalar('L_val', val_loss.item(), i)
                 model.train()
+                
             
 
         ## Evaluation
@@ -167,9 +178,17 @@ if __name__ == "__main__":
         # save model every epoch
         torch.save(model.state_dict(), f'{output_dir}/model_{epoch}_{str(train_loss.item()):.4f}_{str(val_loss.item()):.4f}.pth')
 
+        e_t = time.time()
+        epoch_duration = e_t - s_t
+        avg_train_loss = total_train_loss / len(labeled_dataloader)
         if uda:
-            print(f'{epoch}/{n_epoch}: L_sup: {supervised_loss.item()} L_unsup: {unsupervised_loss.item()} L_train: {train_loss.item()} L_val: {val_loss.item()}')
+            print(f'{epoch}/{n_epoch}: L_sup: {supervised_loss.item()} L_unsup: {unsupervised_loss.item()} L_train: {avg_train_loss.item()} L_val: {val_loss.item()} duration: {epoch_duration:.2f}s')
         else:
-            print(f'{epoch}/{n_epoch}: L_sup: {supervised_loss.item()} L_train: {train_loss.item()} L_val: {val_loss.item()}')
+            print(f'{epoch}/{n_epoch}: L_sup: {supervised_loss.item()} L_train: {avg_train_loss.item()} L_val: {val_loss.item()} duration: {epoch_duration:.2f}s')
+        write.add_scalars('Epoch_Losses', {
+            'Train': avg_train_loss.item(),
+            'Val': val_loss.item()
+        }, epoch)
 
+    writer.close()
 
