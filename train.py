@@ -18,7 +18,7 @@ if __name__ == "__main__":
 #     multiprocessing.freeze_support()
     ## Argument Parser
     parser = argparse.ArgumentParser()
-    parser.add_argument('--uda', type=bool, help='use UDA', default=False)
+    parser.add_argument('--uda', help='use UDA', default=True)
     parser.add_argument('--output_dir', help='path to output folder', default='/home/ted/Projects/UDA/checkpoints')
     parser.add_argument('--cuda', type=bool, help='use GPU is available', default=True)
     parser.add_argument('--n_gpu', type=int, default=1, help='number of GPUs to use') # TODO
@@ -26,10 +26,10 @@ if __name__ == "__main__":
     parser.add_argument('--validation_dir', help='path to validation labeled data csv', default='/home/ted/Projects/Chest%20X-Ray%20Images%20Classification/data/CheXpert-v1.0-small/split/dev.csv')
     parser.add_argument('--unlabeled_dir', help='path to unlabeled data csv', default='/home/ted/Downloads/NIH_sample/sample_labels.csv')
     parser.add_argument('--n_workers', type=int, help='number of workers', default=0)
-    parser.add_argument('--bs', type=int, help='batch_size', default=8)
+    parser.add_argument('--bs', type=int, help='batch_size', default=3)
     parser.add_argument('--lr', type=float, help='initial learning rate', default=1e-3)
-    parser.add_argument('--n_epoch', type=int, help='number of epoch', default=10)
-    parser.add_argument('--weight_dir', default='/home/ted/Projects/UDA/checkpoints/model_best_train_.pth')
+    parser.add_argument('--n_epoch', type=int, help='number of epoch', default=3)
+    parser.add_argument('--weight_dir', default='')
     opt = parser.parse_args()
     print(opt)
 
@@ -67,7 +67,7 @@ if __name__ == "__main__":
                                                         shuffle=True, num_workers=num_workers)
     # Model
     import torchvision.models as models
-    model = models.resnext101_32x8d(groups=1, num_classes=14, zero_init_residual=True)
+    model = models.resnext101_32x8d(groups=1, num_classes=5, zero_init_residual=True)
     model.conv1 = nn.Conv2d(1, 64, 7, stride=2, padding=3, bias=False)
     if opt.weight_dir:
         model.load_state_dict(torch.load(opt.weight_dir))
@@ -81,7 +81,7 @@ if __name__ == "__main__":
     kl_divergence = nn.KLDivLoss(reduction='batchmean').to(device) # unsupervised loss (consistency loss)
 
     if uda:
-        supervised_weight, unsupervised_weight = 0.7, 5.0 
+        supervised_weight, unsupervised_weight = 1.0, 5.0 
     else:
         supervised_weight, unsupervised_weight = 1.0, 0.0
 
@@ -102,7 +102,7 @@ if __name__ == "__main__":
         ## Training
         model.train()
         for i, (img, label) in enumerate(labeled_dataloader):
-            # if i > 300:
+            # if i > 30:
             #     break
             s_t = time.time()
 
@@ -152,7 +152,7 @@ if __name__ == "__main__":
             writer.add_scalar('L_train', train_loss.item(), epoch * len(labeled_dataloader) + i)
 
             # start saving best model (train_loss) after 1000th iterations
-            if (i > 1000 or epoch > 0) and train_loss <= min_train_loss:
+            if (i > 500 or epoch > 0) and train_loss <= min_train_loss:
                 min_train_loss = train_loss
                 torch.save(model.state_dict(), f'{output_dir}/model_best_train.pth')
         
@@ -162,7 +162,7 @@ if __name__ == "__main__":
                 with torch.no_grad():
                     val_loss = 0.0
                     for i_v, (img, label) in enumerate(validation_dataloader):
-                        if i_v > 100:
+                        if i_v > 50:
                             break
                         img, label = img.to(device), label.to(device)
                         output = model(img)
@@ -182,7 +182,7 @@ if __name__ == "__main__":
         with torch.no_grad():
             val_loss = 0.0
             for i, (img, label) in enumerate(validation_dataloader):
-                if i > 1000:
+                if i > 300:
                     break
                 img, label = img.to(device), label.to(device)
                 output = model(img)

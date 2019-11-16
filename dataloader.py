@@ -6,7 +6,7 @@ import torch
 import torchvision
 from torch.utils.data import Dataset
 from torchvision import transforms
-
+from utils import img_to_tensor
 class LabeledDataset(Dataset):
     def __init__(self, csv_dir):
         self.csv_dir = csv_dir
@@ -16,20 +16,20 @@ class LabeledDataset(Dataset):
                          'No Finding', 'Enlarged Cardiomediastinum', 'Pneumonia', 'Pneumothorax', 'Pleural Other']
         self.data[label_names_0] = 1 * (self.data[label_names_0] > 0)  # convert uncertain -1 to negative 0
         self.label_list = [
-            "No Finding",
-            "Enlarged Cardiomediastinum",
+            # "No Finding",
+            # "Enlarged Cardiomediastinum",
             "Cardiomegaly",
-            "Lung Opacity",
-            "Lung Lesion",
+            # "Lung Opacity",
+            # "Lung Lesion",
             "Edema",
             "Consolidation",
-            "Pneumonia",
+            # "Pneumonia",
             "Atelectasis",
-            "Pneumothorax",
+            # "Pneumothorax",
             "Pleural Effusion",
-            "Pleural Other",
-            "Fracture",
-            "Support Devices"
+            # "Pleural Other",
+            # "Fracture",
+            # "Support Devices"
         ]
         self.labels = self.data[self.label_list]
         self.labels = self.labels.apply(lambda x: abs(x)).to_numpy()
@@ -57,12 +57,12 @@ class UnlabeledDataset(Dataset):
         sample_data = self.data.iloc[idx]
         img_dir = "/home/ted/Downloads/NIH_sample/images/" + sample_data.Path
         img = cv2.imread(img_dir, 0) # grayscale
-        img = Image.fromarray(img, 'L')
-        img = transforms.Resize((320, 390))(img)
-
+        img = cv2.resize(img, (320, 390))
+        # img = transforms.Resize((320, 390))(img)
+        
         augmented_img = self.augment(img.copy())
 
-        img, augmented_img = transforms.ToTensor()(img), transforms.ToTensor()(augmented_img)
+        img, augmented_img = img_to_tensor(img), img_to_tensor(augmented_img)
         return img, augmented_img
 
     def __len__(self):
