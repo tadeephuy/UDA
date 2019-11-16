@@ -55,16 +55,19 @@ class UnlabeledDataset(Dataset):
 
     def __getitem__(self, idx):
         sample_data = self.data.iloc[idx]
-        img_dir = sample_data.Path
+        img_dir = "/home/ted/Downloads/NIH_sample/images/" + sample_data.Path
         img = cv2.imread(img_dir, 0) # grayscale
+        img = Image.fromarray(img, 'L')
 
-        augmented_img = self.apply_augmentation(img)
+        augmented_img = self.apply_augmentation(img.copy())
+        img = transforms.Compose([transforms.Resize((320, 320)), transforms.ToTensor()])(img)
         return img, augmented_img
 
     def __len__(self):
         return len(self.data)
 
     def apply_augmentation(self, img):
-        return self.augmentations(img.copy())
-
-        
+        img = transforms.Resize((320, 320))(img)
+        img = self.augmentations(img)
+        img = transforms.ToTensor()(img)
+        return img

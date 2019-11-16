@@ -12,25 +12,27 @@ from torch.utils.tensorboard import SummaryWriter
 from dataloader import LabeledDataset, UnlabeledDataset
 from utils import weights_init
 
-## Argument Parser
-parser = argparse.ArgumentParser()
-parser.add_argument('--uda', type=bool, help='use UDA', default=False)
-parser.add_argument('--output_dir', help='path to output folder', default='/home/ted/Projects/UDA/checkpoints')
-parser.add_argument('--cuda', type=bool, help='use GPU is available', default=True)
-parser.add_argument('--n_gpu', type=int, default=1, help='number of GPUs to use') # TODO
-parser.add_argument('--labeled_dir', help='path to training labeled data csv', default='/home/ted/Projects/Chest%20X-Ray%20Images%20Classification/data/CheXpert-v1.0-small/split/train.csv')
-parser.add_argument('--validation_dir', help='path to validation labeled data csv', default='/home/ted/Projects/Chest%20X-Ray%20Images%20Classification/data/CheXpert-v1.0-small/split/dev.csv')
-parser.add_argument('--unlabeled_dir', help='path to unlabeled data csv', default='')
-parser.add_argument('--n_workers', type=int, help='number of workers', default=20)
-parser.add_argument('--bs', type=int, help='batch_size', default=8)
-parser.add_argument('--lr', type=float, help='initial learning rate', default=1e-3)
-parser.add_argument('--n_epoch', type=int, help='number of epoch', default=5)
-opt = parser.parse_args()
-print(opt)
+
 
 
 if __name__ == "__main__":        
 #     multiprocessing.freeze_support()
+    ## Argument Parser
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--uda', type=bool, help='use UDA', default=False)
+    parser.add_argument('--output_dir', help='path to output folder', default='/home/ted/Projects/UDA/checkpoints')
+    parser.add_argument('--cuda', type=bool, help='use GPU is available', default=True)
+    parser.add_argument('--n_gpu', type=int, default=1, help='number of GPUs to use') # TODO
+    parser.add_argument('--labeled_dir', help='path to training labeled data csv', default='/home/ted/Projects/Chest%20X-Ray%20Images%20Classification/data/CheXpert-v1.0-small/split/train.csv')
+    parser.add_argument('--validation_dir', help='path to validation labeled data csv', default='/home/ted/Projects/Chest%20X-Ray%20Images%20Classification/data/CheXpert-v1.0-small/split/dev.csv')
+    parser.add_argument('--unlabeled_dir', help='path to unlabeled data csv', default='/home/ted/Downloads/NIH_sample/sample_labels.csv')
+    parser.add_argument('--n_workers', type=int, help='number of workers', default=0)
+    parser.add_argument('--bs', type=int, help='batch_size', default=8)
+    parser.add_argument('--lr', type=float, help='initial learning rate', default=1e-3)
+    parser.add_argument('--n_epoch', type=int, help='number of epoch', default=10)
+    parser.add_argument('--weight_dir', default='/home/ted/Projects/UDA/checkpoints/model_best_train_.pth')
+    opt = parser.parse_args()
+    print(opt)
 
     cudnn.benchmark = True # set to False if input sizes vary alot
     
@@ -58,6 +60,8 @@ if __name__ == "__main__":
     validation_dataloader = torch.utils.data.DataLoader(dataset=validation_dataset, batch_size=batch_size, 
                                                         shuffle=False, num_workers=num_workers + 5)
     if uda:
+        augmentations = transforms.Compose([transforms.RandomAffine(degrees=(-15, 15), translate=[0.05, 0.05],
+                                                                    scale=(0.95, 1.05), fillcolor=128)])
         unlabeled_dir = opt.unlabeled_dir
         unlabeled_dataset = UnlabeledDataset(csv_dir=unlabeled_dir, augmentations=augmentations)
         unlabeled_dataloader = torch.utils.data.DataLoader(dataset=unlabeled_dataset, batch_size=batch_size, 
@@ -66,15 +70,19 @@ if __name__ == "__main__":
     import torchvision.models as models
     model = models.resnext101_32x8d(groups=1, num_classes=14, zero_init_residual=True)
     model.conv1 = nn.Conv2d(1, 64, 7, stride=2, padding=3, bias=False)
+    if opt.weight_dir:
+        model.load_state_dict(torch.load(opt.weight_dir))
+        print('weight loaded')
+    else:
+        model.apply(weights_init)
     model = model.to(device)
-    model.apply(weights_init)
 
     # Optimization
     cross_entropy = nn.BCEWithLogitsLoss().to(device) # supervised loss
     kl_divergence = nn.KLDivLoss(reduction='batchmean').to(device) # unsupervised loss (consistency loss)
 
     if uda:
-        supervised_weight, unsupervised_weight = 0.4, 0.6 
+        supervised_weight, unsupervised_weight = 0.7, 5.0 
     else:
         supervised_weight, unsupervised_weight = 1.0, 0.0
 
@@ -95,6 +103,8 @@ if __name__ == "__main__":
         ## Training
         model.train()
         for i, (img, label) in enumerate(labeled_dataloader):
+            # if i > 300:
+            #     break
             s_t = time.time()
 
             model.zero_grad()
@@ -103,8 +113,9 @@ if __name__ == "__main__":
             img, label = img.to(device), label.to(device)
             sup_output = model(img)
             supervised_loss = cross_entropy(sup_output, label)
+            supervised_loss *= supervised_weight
             
-            train_loss = supervised_weight*supervised_loss
+            train_loss = supervised_loss
             # Unsupervised branch #
             #######################
             if uda:
@@ -115,16 +126,21 @@ if __name__ == "__main__":
                 ## calculate the outputs from the two versions
                 # only a fix copy (no gradient flows) when passing original unlabeled img
                 unsup_ori_output = model(unlabeled_img).detach()
-                unsup_ori_output = torch.softmax(unsup_ori_output)
+                unsup_ori_output = torch.nn.functional.log_softmax(unsup_ori_output, 1)
                 # no detach(), still requires gradients to flow through this pass 
                 unsup_aug_output = model(noised_unlabeled_img)
-                unsup_aug_output = torch.log_softmax(unsup_aug_output)
+                unsup_aug_output = torch.nn.functional.softmax(unsup_aug_output, 1)
 
                 ## loss calculation between 2 output probability distributions
                 unsupervised_loss = kl_divergence(unsup_ori_output, unsup_aug_output)
+                unsupervised_loss *= unsupervised_weight
 
                 # TOTAL LOSS #
-                train_loss += unsupervised_weight*unsupervised_loss
+                train_loss += unsupervised_loss
+                writer.add_scalars("Loss_Train", {
+                    'L_sup': supervised_loss.item(),
+                    'L_unsup': unsupervised_loss.item()
+                }, epoch * len(labeled_dataloader) + i)
 
             total_train_loss += train_loss
 
@@ -134,7 +150,7 @@ if __name__ == "__main__":
             e_t = time.time()
             n_iters_per_second = int(1 // (e_t - s_t))
             print(f'[{i}/{len(labeled_dataloader)}] L_train: {train_loss.item():.4f} n_it/s: {n_iters_per_second}')
-            writer.add_scalar('L_train', train_loss.item(), i)
+            writer.add_scalar('L_train', train_loss.item(), epoch * len(labeled_dataloader) + i)
 
             # start saving best model (train_loss) after 1000th iterations
             if (i > 1000 or epoch > 0) and train_loss <= min_train_loss:
@@ -148,17 +164,16 @@ if __name__ == "__main__":
                     val_loss = 0.0
                     for i_v, (img, label) in enumerate(validation_dataloader):
                         if i_v > 100:
-                            i_v -= 1
                             break
                         img, label = img.to(device), label.to(device)
                         output = model(img)
                         val_loss += cross_entropy(output, label)
-                        print(f'L_val: {val_loss.item() / i_v:.4f}')
+                        print(f'L_val: {val_loss.item() / (i_v + 1):.4f}')
                     val_loss = val_loss / i_v
                     if val_loss <= min_val_loss:
                         min_val_loss = val_loss
                         torch.save(model.state_dict(), f'{output_dir}/model_best_val.pth')
-                    writer.add_scalar('L_val', val_loss.item(), i)
+                    writer.add_scalar('L_val', val_loss.item(), epoch * len(labeled_dataloader) + i)
                 model.train()
                 
             
@@ -168,6 +183,8 @@ if __name__ == "__main__":
         with torch.no_grad():
             val_loss = 0.0
             for i, (img, label) in enumerate(validation_dataloader):
+                if i > 1000:
+                    break
                 img, label = img.to(device), label.to(device)
                 output = model(img)
                 val_loss += cross_entropy(output, label)
@@ -176,7 +193,7 @@ if __name__ == "__main__":
         # update learning rate base on val_loss
         scheduler.step(val_loss)
         # save model every epoch
-        torch.save(model.state_dict(), f'{output_dir}/model_{epoch}_{str(train_loss.item()):.4f}_{str(val_loss.item()):.4f}.pth')
+        torch.save(model.state_dict(), f'{output_dir}/model_{epoch}_{train_loss.item():.4f}_{val_loss.item():.4f}.pth')
 
         e_t = time.time()
         epoch_duration = e_t - s_t
@@ -185,7 +202,7 @@ if __name__ == "__main__":
             print(f'{epoch}/{n_epoch}: L_sup: {supervised_loss.item()} L_unsup: {unsupervised_loss.item()} L_train: {avg_train_loss.item()} L_val: {val_loss.item()} duration: {epoch_duration:.2f}s')
         else:
             print(f'{epoch}/{n_epoch}: L_sup: {supervised_loss.item()} L_train: {avg_train_loss.item()} L_val: {val_loss.item()} duration: {epoch_duration:.2f}s')
-        write.add_scalars('Epoch_Losses', {
+        writer.add_scalars('Epoch_Losses', {
             'Train': avg_train_loss.item(),
             'Val': val_loss.item()
         }, epoch)
