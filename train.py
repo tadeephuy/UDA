@@ -11,8 +11,7 @@ import torchvision.utils as vutils
 from torch.utils.tensorboard import SummaryWriter
 from dataloader import LabeledDataset, UnlabeledDataset
 from utils import weights_init
-
-
+from augmentation import apply_augmentations
 
 
 if __name__ == "__main__":        
@@ -60,10 +59,10 @@ if __name__ == "__main__":
     validation_dataloader = torch.utils.data.DataLoader(dataset=validation_dataset, batch_size=batch_size, 
                                                         shuffle=False, num_workers=num_workers + 5)
     if uda:
-        augmentations = transforms.Compose([transforms.RandomAffine(degrees=(-15, 15), translate=[0.05, 0.05],
-                                                                    scale=(0.95, 1.05), fillcolor=128)])
+        # augmentations = transforms.Compose([transforms.RandomAffine(degrees=(-15, 15), translate=[0.05, 0.05],
+        #                                                             scale=(0.95, 1.05), fillcolor=128)])
         unlabeled_dir = opt.unlabeled_dir
-        unlabeled_dataset = UnlabeledDataset(csv_dir=unlabeled_dir, augmentations=augmentations)
+        unlabeled_dataset = UnlabeledDataset(csv_dir=unlabeled_dir, augmentations=apply_augmentations)
         unlabeled_dataloader = torch.utils.data.DataLoader(dataset=unlabeled_dataset, batch_size=batch_size, 
                                                         shuffle=True, num_workers=num_workers)
     # Model
@@ -87,7 +86,7 @@ if __name__ == "__main__":
         supervised_weight, unsupervised_weight = 1.0, 0.0
 
     optimizer = optim.SGD(model.parameters(), lr=opt.lr, momentum=0.99, nesterov=True)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.1, patience=1)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.1, patience=2)
 
     ## Training Loop
     ################

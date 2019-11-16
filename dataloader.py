@@ -39,7 +39,7 @@ class LabeledDataset(Dataset):
         img_dir = "/home/ted/Projects/Chest%20X-Ray%20Images%20Classification/data/" + sample_data.Path
         img = cv2.imread(img_dir, 0) # grayscale
         img = Image.fromarray(img, 'L')
-        img = transforms.Compose([transforms.Resize((320, 320)), transforms.ToTensor()])(img)
+        img = transforms.Compose([transforms.Resize((320, 390)), transforms.ToTensor()])(img)
         label = self.labels[idx]
         return img, label
 
@@ -58,16 +58,16 @@ class UnlabeledDataset(Dataset):
         img_dir = "/home/ted/Downloads/NIH_sample/images/" + sample_data.Path
         img = cv2.imread(img_dir, 0) # grayscale
         img = Image.fromarray(img, 'L')
+        img = transforms.Resize((320, 390))(img)
 
-        augmented_img = self.apply_augmentation(img.copy())
-        img = transforms.Compose([transforms.Resize((320, 320)), transforms.ToTensor()])(img)
+        augmented_img = self.augment(img.copy())
+
+        img, augmented_img = transforms.ToTensor()(img), transforms.ToTensor()(augmented_img)
         return img, augmented_img
 
     def __len__(self):
         return len(self.data)
 
-    def apply_augmentation(self, img):
-        img = transforms.Resize((320, 320))(img)
+    def augment(self, img):
         img = self.augmentations(img)
-        img = transforms.ToTensor()(img)
         return img
