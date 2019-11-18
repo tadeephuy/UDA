@@ -10,23 +10,22 @@ import torchvision.transforms as transforms
 import torchvision.utils as vutils
 from torch.utils.tensorboard import SummaryWriter
 from dataloader import LabeledDataset, UnlabeledDataset
-from utils import weights_init
+from utils import weights_init, DiceLoss
 from augmentation import apply_augmentations
-
 
 if __name__ == "__main__":        
 #     multiprocessing.freeze_support()
     ## Argument Parser
     parser = argparse.ArgumentParser()
-    parser.add_argument('--uda', help='use UDA', default=True)
+    parser.add_argument('--uda', help='use UDA', default=False)
     parser.add_argument('--output_dir', help='path to output folder', default='/home/ted/Projects/UDA/checkpoints')
     parser.add_argument('--cuda', type=bool, help='use GPU is available', default=True)
     parser.add_argument('--n_gpu', type=int, default=1, help='number of GPUs to use') # TODO
     parser.add_argument('--labeled_dir', help='path to training labeled data csv', default='/home/ted/Projects/Chest%20X-Ray%20Images%20Classification/data/CheXpert-v1.0-small/split/train.csv')
     parser.add_argument('--validation_dir', help='path to validation labeled data csv', default='/home/ted/Projects/Chest%20X-Ray%20Images%20Classification/data/CheXpert-v1.0-small/split/dev.csv')
     parser.add_argument('--unlabeled_dir', help='path to unlabeled data csv', default='/home/ted/Downloads/NIH_sample/sample_labels.csv')
-    parser.add_argument('--n_workers', type=int, help='number of workers', default=0)
-    parser.add_argument('--bs', type=int, help='batch_size', default=3)
+    parser.add_argument('--n_workers', type=int, help='number of workers', default=4)
+    parser.add_argument('--bs', type=int, help='batch_size', default=8)
     parser.add_argument('--lr', type=float, help='initial learning rate', default=1e-3)
     parser.add_argument('--n_epoch', type=int, help='number of epoch', default=3)
     parser.add_argument('--weight_dir', default='')
@@ -57,7 +56,7 @@ if __name__ == "__main__":
     validation_dir = opt.validation_dir
     validation_dataset = LabeledDataset(csv_dir=labeled_dir)
     validation_dataloader = torch.utils.data.DataLoader(dataset=validation_dataset, batch_size=batch_size, 
-                                                        shuffle=False, num_workers=num_workers + 5)
+                                                        shuffle=False, num_workers=num_workers)
     if uda:
         # augmentations = transforms.Compose([transforms.RandomAffine(degrees=(-15, 15), translate=[0.05, 0.05],
         #                                                             scale=(0.95, 1.05), fillcolor=128)])
@@ -78,6 +77,7 @@ if __name__ == "__main__":
 
     # Optimization
     cross_entropy = nn.BCEWithLogitsLoss().to(device) # supervised loss
+    dice_loss = DiceLoss().to(device)
     kl_divergence = nn.KLDivLoss(reduction='batchmean').to(device) # unsupervised loss (consistency loss)
 
     if uda:
@@ -85,8 +85,9 @@ if __name__ == "__main__":
     else:
         supervised_weight, unsupervised_weight = 1.0, 0.0
 
-    optimizer = optim.SGD(model.parameters(), lr=opt.lr, momentum=0.99, nesterov=True)
+    optimizer = optim.SGD(model.parameters(), lr=opt.lr, momentum=0.99, nesterov=True, weight_decay=5e-4)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.1, patience=2)
+    
 
     ## Training Loop
     ################
@@ -111,10 +112,15 @@ if __name__ == "__main__":
             #####################
             img, label = img.to(device), label.to(device)
             sup_output = model(img)
-            supervised_loss = cross_entropy(sup_output, label)
+            ce_loss, d_loss = cross_entropy(sup_output, label), dice_loss(sup_output, label)
+            supervised_loss = 0.4*ce_loss + 0.6*d_loss
             supervised_loss *= supervised_weight
             
             train_loss = supervised_loss
+            writer.add_scalars("Supervised_Loss", {
+                    'BCE': ce_loss.item(),
+                    'Dice': d_loss.item()
+                }, epoch * len(labeled_dataloader) + i)
             # Unsupervised branch #
             #######################
             if uda:
@@ -166,7 +172,7 @@ if __name__ == "__main__":
                             break
                         img, label = img.to(device), label.to(device)
                         output = model(img)
-                        val_loss += cross_entropy(output, label)
+                        val_loss += 0.4*cross_entropy(sup_output, label) + 0.6*dice_loss(sup_output, label)
                         print(f'L_val: {val_loss.item() / (i_v + 1):.4f}')
                     val_loss = val_loss / i_v
                     if val_loss <= min_val_loss:
@@ -186,7 +192,7 @@ if __name__ == "__main__":
                     break
                 img, label = img.to(device), label.to(device)
                 output = model(img)
-                val_loss += cross_entropy(output, label)
+                val_loss += 0.4*cross_entropy(sup_output, label) + 0.6*dice_loss(sup_output, label)
             val_loss = val_loss / i
 
         # update learning rate base on val_loss
