@@ -1,0 +1,4 @@
+*.pyc
+checkpoints/
+events.*
+settings.json
