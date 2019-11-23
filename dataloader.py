@@ -8,10 +8,10 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 from utils import img_to_tensor
 class LabeledDataset(Dataset):
-    def __init__(self, csv_dir, augmentations=None, n_samples=200, beast=False, uda=False, prefix=''):
+    def __init__(self, csv_dir, augmentations=None, n_samples=200, beast=False, uda=False, prefix='', raw=False):
         self.csv_dir = csv_dir
         self.data = pd.read_csv(self.csv_dir)
-        self.data.fillna(0)
+        self.data.fillna(0, inplace=True)
         label_names_0 = ['Cardiomegaly', 'Consolidation',
                          'No Finding', 'Enlarged Cardiomediastinum', 'Pneumonia', 'Pneumothorax', 'Pleural Other']
         self.data[label_names_0] = 1 * (self.data[label_names_0] > 0)  # convert uncertain -1 to negative 0
@@ -48,10 +48,11 @@ class LabeledDataset(Dataset):
             for idx, sample_data in self.data.sample(n_samples).iterrows():
                 img_dir = self.prefix + sample_data.Path
                 img = cv2.imread(img_dir, 0) # grayscale
-                img = Image.fromarray(img, 'L')
                 self.labels_.append(self.labels[idx])
                 self.imgs.append(img)
             self.labels = np.array(self.labels_)
+        print(f"number of samples: {self.__len__()}")
+        self.raw = raw
 
         
 
@@ -62,13 +63,12 @@ class LabeledDataset(Dataset):
             sample_data = self.data.iloc[idx]
             img_dir = self.prefix + sample_data.Path
             img = cv2.imread(img_dir, 0) # grayscale
-            img = cv2.resize(img, (320, 390))
-
+        img = cv2.resize(img, (320, 320))
         # apply augmentations if not in UDA mode
         if not self.uda and self.augmentations:
             img = self.augment(img)
-
-        img = img_to_tensor(img)
+        if not self.raw:
+            img = img_to_tensor(img)
         label = self.labels[idx]
         return img, label
 
@@ -96,7 +96,7 @@ class UnlabeledDataset(Dataset):
                 img_dir = self.prefix + sample_data['Image Index']
                 print(img_dir)
                 img = cv2.imread(img_dir, 0) # grayscale
-                img = cv2.resize(img, (320, 390))
+                img = cv2.resize(img, (320, 320))
                 self.imgs.append(img)
 
     def __getitem__(self, idx):
@@ -106,7 +106,7 @@ class UnlabeledDataset(Dataset):
             sample_data = self.data.iloc[idx]
             img_dir = self.prefix + sample_data['Image Index']
             img = cv2.imread(img_dir, 0) # grayscale
-            img = cv2.resize(img, (320, 390))
+            img = cv2.resize(img, (320, 320))
         
         augmented_img = self.augment(img.copy())
 

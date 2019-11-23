@@ -11,7 +11,7 @@ import torchvision.transforms as transforms
 import torchvision.utils as vutils
 from torch.utils.tensorboard import SummaryWriter
 from dataloader import LabeledDataset, UnlabeledDataset
-from utils import weights_init, DiceLoss, AUCLoss, create_figure, calculate_auc
+from utils import weights_init, DiceLoss, AUCLoss, PropensityLoss, create_figure, calculate_auc
 from augmentation import apply_augmentations_sup, augmentations_unsup
 # print = lambda x: None
 
@@ -97,8 +97,10 @@ if __name__ == "__main__":
     dice_loss = DiceLoss().to(device)
     auc_loss = AUCLoss().to(device)
     kl_divergence = nn.KLDivLoss(reduction='batchmean').to(device) # unsupervised loss (consistency loss)
+    labels_array = torch.from_numpy(labeled_dataset.labels).to(device)
+    propensity_loss = PropensityLoss(labels_array).to(device) # take in labels set to calculate propensities
     # proxy_w*(ce_w*ce_loss + d_w*d_loss) + a_w*a_loss
-    proxy_weight, ce_weight, d_weight, a_weight = 1.5, 0.8, 0.0, 1.0
+    proxy_weight, ce_weight, d_weight, a_weight, p_weight = 1.0, 0.8, 0.0, 0.5, 1.5
     if uda:
         supervised_weight, unsupervised_weight = 1.0, 5.0
     else:
@@ -137,7 +139,8 @@ if __name__ == "__main__":
                 writer.add_figure("Labeled", fig, epoch * len(labeled_dataloader) + i)
             sup_output = model(img)
             ce_loss, d_loss, a_loss = cross_entropy(sup_output, label), dice_loss(sup_output, label), auc_loss(sup_output, label)
-            supervised_loss = proxy_weight*(ce_weight*ce_loss + d_weight*d_loss) + a_weight*a_loss
+            p_loss = propensity_loss(sup_output, label)
+            supervised_loss = proxy_weight*(ce_weight*ce_loss + d_weight*d_loss) + a_weight*a_loss + p_weight*p_loss
             supervised_loss *= supervised_weight
             
             train_loss = supervised_loss
@@ -145,7 +148,8 @@ if __name__ == "__main__":
                 writer.add_scalars("Supervised_Loss", {
                         'BCE': ce_loss.item(),
                         'Dice': d_loss.item(),
-                        'AUC': a_loss.item()
+                        'AUC': a_loss.item(),
+                        'Propensity': p_loss.item(),
                     }, epoch * len(labeled_dataloader) + i)
             # Unsupervised branch #
             #######################

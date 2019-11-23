@@ -27,10 +27,10 @@ def img_to_tensor(img_array):
     return img
 
 class DiceLoss(torch.nn.Module):
-    def init(self):
-        super(DiceLoss, self).init()
+    def __init__(self):
+        super(DiceLoss, self).__init__()
     def forward(self,pred, target):
-       smooth = 1.
+       smooth = 1e-6
        iflat = pred.contiguous().view(-1)
        tflat = target.contiguous().view(-1)
        intersection = (iflat * tflat).sum()
@@ -39,14 +39,55 @@ class DiceLoss(torch.nn.Module):
        return 1 - ((2. * intersection + smooth) / (A_sum + B_sum + smooth) )
 
 class AUCLoss(torch.nn.Module):
-    def init(self):
-        super(AUCLoss, self).init()
+    def __init__(self):
+        super(AUCLoss, self).__init__()
     def forward(self, pred, target):
         a = torch.sigmoid(torch.mm(pred, pred.T))
         b = torch.mm(target, torch.ones(target.shape).T.cuda())
         c = torch.mm(torch.ones(target.shape).cuda(), target.T)
         cost = torch.mean(a * torch.from_numpy(np.maximum(b.cpu().numpy() - c.cpu().numpy(), 0)).cuda())
         return 1 - cost
+
+class PropensityLoss(torch.nn.Module):
+    """
+    Implementation based on
+    'Extreme Multi-label Loss Functions for 
+    Recommendation, Tagging, Ranking & Other Missing Label Applications'
+    http://ceur-ws.org/Vol-2126/paper10.pdf
+    """
+    def __init__(self, labels_array):
+        super(PropensityLoss, self).__init__()
+        propensities = self.calculate_propensities(labels_array)
+        self.propensities = propensities
+
+    def forward(self, pred, target):
+        N = pred.shape[0]
+        pred = torch.sigmoid(pred).cuda()
+        cost = torch.sum((1 / self.propensities) * (2*pred - 1) * ((target - pred) ** 2)) / N
+        return 1 - cost
+
+    @staticmethod
+    def calculate_propensities(labels_array):
+        """
+        labels_array of size NxNl where N is the number of samples 
+        and Nl is the total counts of each class within the dataset
+        """
+        N = torch.Tensor([labels_array.shape[0]]).cuda()
+        Nl = torch.sum(labels_array, dim=0).cuda()
+        propensities = 1 / (1 + (torch.log(N - 1)).double() * 1.183 * torch.exp(-0.5 * torch.log(Nl + 0.4).double()).double())
+        return propensities
+
+    def _augment_imgs(self, x):
+        augmented_imgs = []
+        for _ in range(self.n_predictions):
+            augmented_img = img_to_tensor(self.augmentations(x))
+            augmented_imgs.append(augmented_img)
+        augmented_imgs = torch.cat(augmented_imgs)
+        return augmented_imgs
+
+    def _ensemble_pred(self, preds):
+        ensembled_pred = torch.mean(preds, dim=0)
+        return ensembled_pred
 
 def create_figure(img, labels, uda=False):
     if uda:
